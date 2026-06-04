@@ -1,0 +1,10 @@
+services:
+  yt2vk-bot:
+    build: .
+    container_name: yt2vk-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    tmpfs:
+      - /tmp/yt2vk:,size=3g,mode=1777
