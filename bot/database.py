@@ -88,11 +88,11 @@ async def close_db():
 
 # ── FSM helpers ──────────────────────────────────────────────
 
-async def save_fsm_state(peer_id: int, state: str, data: dict):
+async def save_fsm_state(peer_id: int, state, data: dict):
     db = get_db()
     await db.execute(
         "INSERT OR REPLACE INTO fsm_states (peer_id, state, data, updated_at) VALUES (?, ?, ?, datetime('now'))",
-        (peer_id, state, json.dumps(data, ensure_ascii=False)),
+        (peer_id, state.value if hasattr(state, "value") else state, json.dumps(data, ensure_ascii=False)),
     )
     await db.commit()
 

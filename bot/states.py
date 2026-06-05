@@ -1,9 +1,10 @@
 """FSM states for VK bot."""
 
-from enum import Enum
+from vkbottle.dispatch import BaseStateGroup
 
 
-class States(str, Enum):
+class States(BaseStateGroup):
+    """FSM states — must extend BaseStateGroup for vkbottle 4.9.0 StateRule compatibility."""
     IDLE = ""
     # Subscribe flow
     SUB_ASK_URL = "sub_ask_url"
@@ -25,8 +26,9 @@ class States(str, Enum):
 
 class ProcessingStatus:
     """Track status of current video processing (for /status command)."""
-    current_task: str = ""      # "downloading", "uploading", ""
+    current_task: str = ""
     current_url: str = ""
     current_title: str = ""
     progress: str = ""
     error: str = ""
+
