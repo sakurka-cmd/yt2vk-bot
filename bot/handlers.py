@@ -13,7 +13,7 @@ from bot.downloader import (
     download_video, extract_video_id, extract_channel_id,
     get_video_info, get_channel_info, cleanup_file,
 )
-from bot.uploader import upload_video, create_album, list_albums
+from bot.uploader import upload_video, create_album, list_albums, get_album_by_title
 from bot.keyboards import (
     quality_keyboard, yes_no_keyboard, cancel_keyboard, main_menu_keyboard,
 )
@@ -25,12 +25,11 @@ logger = logging.getLogger(__name__)
 def register_handlers(bot: Bot):
     """Register all message handlers on the bot."""
 
-    # ── Helper: check if user is admin ───────────────────────
     from bot.config import ADMIN_IDS
 
     def is_admin(msg: Message) -> bool:
         if not ADMIN_IDS:
-            return True  # No restriction if no admins configured
+            return True
         return msg.from_id in ADMIN_IDS
 
     # ── /start ──────────────────────────────────────────────
@@ -72,7 +71,7 @@ def register_handlers(bot: Bot):
             "Бот сохраняет видео с YouTube в альбомы сообщества VK.\n\n"
             "Подписка на канал:\n"
             "  /subscribe — бот будет проверять канал по RSS\n"
-            "  и автоматически загружать новые видео\n\n"
+            "  и автоматически загружать новые видео в альбом канала\n\n"
             "Разовая загрузка:\n"
             "  /dl https://youtube.com/watch?v=XXXXX\n\n"
             "Качество: 480p, 720p (по умолчанию), 1080p, 4K\n\n"
@@ -121,7 +120,7 @@ def register_handlers(bot: Bot):
         ProcessingStatus.current_task = ""
         await msg.answer("Отменено.", keyboard=main_menu_keyboard())
 
-    # ── FSM: Album creation ─────────────────────────────────
+    # ── FSM: Album creation (standalone / new during dl) ─────
     @bot.on.message(state=States.ALBUM_ASK_TITLE)
     async def fsm_album_title(msg: Message):
         title = msg.text.strip()
@@ -131,6 +130,30 @@ def register_handlers(bot: Bot):
 
         result = await create_album(title)
         if result:
+            # Check if this was called during subscribe flow (sub_data in state)
+            state, data = await db.get_fsm_state(msg.peer_id)
+
+            if "dl_data" in data:
+                # Resuming dl flow after creating album
+                dl_data = data["dl_data"]
+                album_id = result["album_id"]
+                dl_data["album_id"] = album_id
+
+                await db.clear_fsm_state(msg.peer_id)
+                asyncio.create_task(
+                    _process_download(msg.peer_id, dl_data["url"], album_id, dl_data["quality"])
+                )
+                quality_text = f"{dl_data['quality']}p" if dl_data['quality'] != "4k" else "4K"
+                await msg.answer(
+                    f"Альбом создан: [{album_id}] {title}\n\n"
+                    f"Загрузка началась...\n"
+                    f"URL: {dl_data['url']}\n"
+                    f"Качество: {quality_text}\n\n"
+                    f"Проверяйте статус: /status",
+                    keyboard=main_menu_keyboard(),
+                )
+                return
+
             await db.clear_fsm_state(msg.peer_id)
             await msg.answer(
                 f"Альбом создан: [{result['album_id']}] {title}",
@@ -140,6 +163,7 @@ def register_handlers(bot: Bot):
             await msg.answer("Ошибка создания альбома. Проверьте права группы.")
 
     # ── /subscribe ─────────────────────────────────────────
+    # Flow: URL → quality → auto-create album → confirm
     @bot.on.message(CommandRule("subscribe"))
     async def cmd_subscribe(msg: Message):
         if not is_admin(msg):
@@ -158,33 +182,23 @@ def register_handlers(bot: Bot):
         url = msg.text.strip()
         channel_id = extract_channel_id(url) or url
 
-        # Get channel info
         info = await get_channel_info(url)
         if info:
             channel_title = info.get("title", channel_id)
-            await db.save_fsm_state(msg.peer_id, States.SUB_ASK_QUALITY, {
-                "channel_id": channel_id,
-                "channel_title": channel_title,
-            })
-            await msg.answer(
-                f"Канал: {channel_title}\n"
-                f"Выберите качество видео:",
-                keyboard=quality_keyboard(),
-            )
         else:
-            # Still allow proceeding with raw ID
-            await db.save_fsm_state(msg.peer_id, States.SUB_ASK_QUALITY, {
-                "channel_id": channel_id,
-                "channel_title": url,
-            })
-            await msg.answer(
-                f"Не удалось получить информацию о канале.\n"
-                f"ID: {channel_id}\n\n"
-                f"Выберите качество видео:",
-                keyboard=quality_keyboard(),
-            )
+            channel_title = url
 
-    # ── FSM: Subscribe — ask quality ─────────────────────────
+        await db.save_fsm_state(msg.peer_id, States.SUB_ASK_QUALITY, {
+            "channel_id": channel_id,
+            "channel_title": channel_title,
+        })
+        await msg.answer(
+            f"Канал: {channel_title}\n"
+            f"Выберите качество видео:",
+            keyboard=quality_keyboard(),
+        )
+
+    # ── FSM: Subscribe — ask quality → auto-create album + confirm ──
     @bot.on.message(state=States.SUB_ASK_QUALITY)
     async def fsm_sub_quality(msg: Message):
         quality_map = {"480": "480", "720": "720", "1080": "1080", "4k": "4k"}
@@ -202,84 +216,38 @@ def register_handlers(bot: Bot):
 
         state, data = await db.get_fsm_state(msg.peer_id)
         data["quality"] = quality
+        channel_title = data["channel_title"]
 
-        # Show albums for selection
-        albums = await list_albums()
-        if not albums:
-            await msg.answer(
-                "В сообществе нет альбомов. Сначала создайте: /addalbum"
-            )
-            await db.clear_fsm_state(msg.peer_id)
-            return
+        # Auto-create album named after channel
+        album_name = f"YT: {channel_title}"
+        await msg.answer(f"Создаю альбом: {album_name}...")
 
-        lines = [f"Канал: {data['channel_title']}", f"Качество: {quality}p" if quality != "4k" else f"Качество: 4K", "", "Выберите альбом:"]
-        for a in albums:
-            lines.append(f"  [{a.get('id', '')}] {a.get('title', 'Без названия')}")
-
-        lines.append("")
-        lines.append("Или отправьте 'новый' для создания нового альбома.")
-
-        await db.save_fsm_state(msg.peer_id, States.SUB_ASK_ALBUM, data)
-        await msg.answer("\n".join(lines), keyboard=cancel_keyboard())
-
-    # ── FSM: Subscribe — ask album ──────────────────────────
-    @bot.on.message(state=States.SUB_ASK_ALBUM)
-    async def fsm_sub_album(msg: Message):
-        text = msg.text.strip()
-
-        if text.lower() in ("отмена", "cancel"):
-            await db.clear_fsm_state(msg.peer_id)
-            await msg.answer("Отменено.", keyboard=main_menu_keyboard())
-            return
-
-        state, data = await db.get_fsm_state(msg.peer_id)
-        album_id = None
-        album_title = ""
-
-        # Check if user typed "новый" or a number
-        if text.lower() in ("новый", "new"):
-            await db.save_fsm_state(msg.peer_id, States.ALBUM_ASK_TITLE, {"sub_data": data})
-            await msg.answer("Введите название нового альбома:")
-            return
-
-        # Try to parse album ID from message
-        import re
-        nums = re.findall(r"\d+", text)
-        if nums:
-            album_id = int(nums[0])
-            # Verify album exists
-            albums = await list_albums()
-            found = None
-            for a in albums:
-                if a.get("id") == album_id:
-                    found = a
-                    break
-            if found:
-                album_title = found.get("title", "")
-            else:
-                await msg.answer("Альбом не найден. Выберите из списка:")
-                return
+        existing = await get_album_by_title(album_name)
+        if existing:
+            album_id = existing.get("id")
+            logger.info("Album already exists: [%d] %s", album_id, album_name)
         else:
-            # Search by title
-            albums = await list_albums()
-            for a in albums:
-                if text.lower() in a.get("title", "").lower():
-                    album_id = a.get("id")
-                    album_title = a.get("title", "")
-                    break
-            if not album_id:
-                await msg.answer("Альбом не найден. Введите ID или название:")
+            album = await create_album(album_name)
+            if album:
+                album_id = album["album_id"]
+                logger.info("Album created: [%d] %s", album_id, album_name)
+            else:
+                await msg.answer(
+                    "Не удалось создать альбом. Проверьте права группы (нужен доступ к видео).\n"
+                    "Подписка отменена.",
+                    keyboard=main_menu_keyboard(),
+                )
+                await db.clear_fsm_state(msg.peer_id)
                 return
 
         data["album_id"] = album_id
-        data["album_title"] = album_title
+        data["album_title"] = album_name
 
-        # Show confirmation
-        quality_text = f"{data['quality']}p" if data['quality'] != '4k' else "4K"
+        quality_text = f"{quality}p" if quality != "4k" else "4K"
         await msg.answer(
             f"Подтвердите подписку:\n\n"
-            f"Канал: {data['channel_title']}\n"
-            f"Альбом: [{album_id}] {album_title}\n"
+            f"Канал: {channel_title}\n"
+            f"Альбом: [{album_id}] {album_name}\n"
             f"Качество: {quality_text}\n\n"
             f"Подписаться?",
             keyboard=yes_no_keyboard(),
@@ -329,17 +297,7 @@ def register_handlers(bot: Bot):
             )
 
         lines.append("\nУправление: /unsub, /quality")
-
-        # Build inline keyboard for toggling
-        from vkbottle import Keyboard, KeyboardButtonColor, Text
-        from vkbottle.bot import CallbackQuery
-        kb = Keyboard(inline=True)
-        for s in subs:
-            label = f"{'✅' if s['active'] else '❌'} #{s['id']} {s['channel_title'][:20]}"
-            kb.add(Text(label, {"action": "toggle", "id": s["id"]}), color=KeyboardButtonColor.SECONDARY)
-            kb.row()
-        kb.add(Text("Закрыть", {"action": "close"}), color=KeyboardButtonColor.NEGATIVE)
-        await msg.answer("\n".join(lines), keyboard=kb)
+        await msg.answer("\n".join(lines))
 
     # ── /unsub ──────────────────────────────────────────────
     @bot.on.message(CommandRule("unsub"))
@@ -377,17 +335,16 @@ def register_handlers(bot: Bot):
             kb.add(Text(label, {"action": "sel_qual", "id": s["id"]}), color=KeyboardButtonColor.SECONDARY)
             kb.row()
         kb.add(Text("Отмена", {"action": "cancel"}), color=KeyboardButtonColor.SECONDARY)
-        await db.save_fsm_state(msg.peer_id, States.QUALITY_SELECT, {})
         await msg.answer("Выберите подписку для изменения качества:", keyboard=kb)
 
     # ── /dl ──────────────────────────────────────────────────
+    # Flow: URL → quality → album (select or create) → download
     @bot.on.message(CommandRule("dl"))
     async def cmd_dl(msg: Message):
         if not is_admin(msg):
             await msg.answer("Доступ только для администраторов.")
             return
 
-        # Check if URL was in the same message: /dl https://...
         url = msg.text.strip()
         parts = url.split()
         if len(parts) > 1:
@@ -420,7 +377,7 @@ def register_handlers(bot: Bot):
         await db.save_fsm_state(msg.peer_id, States.DL_ASK_QUALITY, {"url": url})
         await msg.answer(f"Видео: {url}\nВыберите качество:", keyboard=quality_keyboard())
 
-    # ── FSM: Download — ask quality ─────────────────────────
+    # ── FSM: Download — ask quality → album selection ───────
     @bot.on.message(state=States.DL_ASK_QUALITY)
     async def fsm_dl_quality(msg: Message):
         quality_map = {"480": "480", "720": "720", "1080": "1080", "4k": "4k"}
@@ -439,13 +396,8 @@ def register_handlers(bot: Bot):
         state, data = await db.get_fsm_state(msg.peer_id)
         data["quality"] = quality
 
-        # Show albums
+        # Show albums for selection
         albums = await list_albums()
-        if not albums:
-            await msg.answer("В сообществе нет альбомов. Сначала создайте: /addalbum")
-            await db.clear_fsm_state(msg.peer_id)
-            return
-
         lines = ["Выберите альбом для загрузки:"]
         for a in albums:
             lines.append(f"  [{a.get('id', '')}] {a.get('title', 'Без названия')}")
@@ -477,16 +429,24 @@ def register_handlers(bot: Bot):
         album_id = None
         if nums:
             album_id = int(nums[0])
+            albums = await list_albums()
+            found = False
+            for a in albums:
+                if a.get("id") == album_id:
+                    found = True
+                    break
+            if not found:
+                await msg.answer("Альбом не найден. Выберите из списка или введите 'новый':")
+                return
         else:
             albums = await list_albums()
             for a in albums:
                 if text.lower() in a.get("title", "").lower():
                     album_id = a.get("id")
                     break
-
-        if not album_id:
-            await msg.answer("Альбом не найден. Введите ID или название:")
-            return
+            if not album_id:
+                await msg.answer("Альбом не найден. Введите ID или название:")
+                return
 
         data["album_id"] = album_id
 
@@ -514,8 +474,7 @@ def register_handlers(bot: Bot):
                 f"Статус: {ProcessingStatus.progress}"
             )
         else:
-            # Show last completed tasks
-            d = get_db()
+            d = db.get_db()
             cur = await d.execute(
                 "SELECT * FROM oneoff_tasks ORDER BY id DESC LIMIT 3"
             )
@@ -535,14 +494,12 @@ def register_handlers(bot: Bot):
 
 async def _process_download(peer_id: int, url: str, album_id: int, quality: str):
     """Background task: download video and upload to VK."""
-    from bot import database as db
     from bot.downloader import download_video, get_video_info, cleanup_file
     from bot.uploader import upload_video
 
     ProcessingStatus.current_task = "downloading"
     ProcessingStatus.current_url = url
 
-    # Get video info
     info = await get_video_info(url)
     title = info.get("title", "Untitled") if info else "Untitled"
     yt_id = info.get("id", "") if info else ""
@@ -555,10 +512,8 @@ async def _process_download(peer_id: int, url: str, album_id: int, quality: str)
         ProcessingStatus.error = "Не удалось получить информацию о видео"
         return
 
-    # Create task record
     task_id = await db.create_task(peer_id, url, yt_id, album_id, quality, title)
 
-    # Download
     ProcessingStatus.progress = "Скачивание..."
     file_path = await download_video(url, quality)
 
@@ -574,7 +529,6 @@ async def _process_download(peer_id: int, url: str, album_id: int, quality: str)
         await db.update_task_status(task_id, "failed", error="File too large")
         return
 
-    # Upload
     ProcessingStatus.current_task = "uploading"
     ProcessingStatus.progress = "Загрузка в VK..."
 
@@ -595,3 +549,4 @@ async def _process_download(peer_id: int, url: str, album_id: int, quality: str)
         ProcessingStatus.current_task = ""
         ProcessingStatus.error = "Загрузка в VK не удалась"
         await db.update_task_status(task_id, "failed", error="VK upload failed")
+
