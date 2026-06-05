@@ -34,7 +34,7 @@ def register_handlers(bot: Bot):
         return msg.from_id in ADMIN_IDS
 
     # ── /start ──────────────────────────────────────────────
-    @bot.on.message(CommandRule("start", ["/!"]))
+    @bot.on.message(CommandRule("start"))
     async def cmd_start(msg: Message):
         await msg.answer(
             "Бот для сохранения видео с YouTube в альбомы сообщества VK.\n\n"
@@ -66,7 +66,7 @@ def register_handlers(bot: Bot):
         )
 
     # ── /help ────────────────────────────────────────────────
-    @bot.on.message(CommandRule("help", ["/!"]))
+    @bot.on.message(CommandRule("help"))
     async def cmd_help(msg: Message):
         await msg.answer(
             "Бот сохраняет видео с YouTube в альбомы сообщества VK.\n\n"
@@ -90,7 +90,7 @@ def register_handlers(bot: Bot):
         )
 
     # ── /albums ─────────────────────────────────────────────
-    @bot.on.message(CommandRule("albums", ["/!"]))
+    @bot.on.message(CommandRule("albums"))
     async def cmd_albums(msg: Message):
         albums = await list_albums()
         if not albums:
@@ -107,7 +107,7 @@ def register_handlers(bot: Bot):
         await msg.answer("\n".join(lines))
 
     # ── /addalbum ──────────────────────────────────────────
-    @bot.on.message(CommandRule("addalbum", ["/!"]))
+    @bot.on.message(CommandRule("addalbum"))
     async def cmd_addalbum(msg: Message):
         if not is_admin(msg):
             await msg.answer("Доступ только для администраторов.")
@@ -140,7 +140,7 @@ def register_handlers(bot: Bot):
             await msg.answer("Ошибка создания альбома. Проверьте права группы.")
 
     # ── /subscribe ─────────────────────────────────────────
-    @bot.on.message(CommandRule("subscribe", ["/!"]))
+    @bot.on.message(CommandRule("subscribe"))
     async def cmd_subscribe(msg: Message):
         if not is_admin(msg):
             await msg.answer("Доступ только для администраторов.")
@@ -311,7 +311,7 @@ def register_handlers(bot: Bot):
             await msg.answer("Отменено.", keyboard=main_menu_keyboard())
 
     # ── /list ────────────────────────────────────────────────
-    @bot.on.message(CommandRule("list", ["/!"]))
+    @bot.on.message(CommandRule("list"))
     async def cmd_list(msg: Message):
         subs = await db.list_subscriptions()
         if not subs:
@@ -342,7 +342,7 @@ def register_handlers(bot: Bot):
         await msg.answer("\n".join(lines), keyboard=kb)
 
     # ── /unsub ──────────────────────────────────────────────
-    @bot.on.message(CommandRule("unsub", ["/!"]))
+    @bot.on.message(CommandRule("unsub"))
     async def cmd_unsub(msg: Message):
         if not is_admin(msg):
             await msg.answer("Доступ только для администраторов.")
@@ -362,7 +362,7 @@ def register_handlers(bot: Bot):
         await msg.answer("Выберите подписку для удаления:", keyboard=kb)
 
     # ── /quality ───────────────────────────────────────────
-    @bot.on.message(CommandRule("quality", ["/!"]))
+    @bot.on.message(CommandRule("quality"))
     async def cmd_quality(msg: Message):
         subs = await db.list_subscriptions()
         if not subs:
@@ -381,7 +381,7 @@ def register_handlers(bot: Bot):
         await msg.answer("Выберите подписку для изменения качества:", keyboard=kb)
 
     # ── /dl ──────────────────────────────────────────────────
-    @bot.on.message(CommandRule("dl", ["/!"]))
+    @bot.on.message(CommandRule("dl"))
     async def cmd_dl(msg: Message):
         if not is_admin(msg):
             await msg.answer("Доступ только для администраторов.")
@@ -504,7 +504,7 @@ def register_handlers(bot: Bot):
         )
 
     # ── /status ─────────────────────────────────────────────
-    @bot.on.message(CommandRule("status", ["/!"]))
+    @bot.on.message(CommandRule("status"))
     async def cmd_status(msg: Message):
         if ProcessingStatus.current_task:
             await msg.answer(

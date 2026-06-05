@@ -34,16 +34,17 @@ def cancel_keyboard() -> Keyboard:
 
 
 def main_menu_keyboard() -> Keyboard:
-    """Main bot menu."""
-    kb = Keyboard(one_time=True)
-    kb.add(Text("/subscribe", {"cmd": "subscribe"}))
+    """Persistent main bot menu with user-friendly button labels."""
+    kb = Keyboard()
+    kb.add(Text("/subscribe"), color=KeyboardButtonColor.POSITIVE)
+    kb.add(Text("/dl"), color=KeyboardButtonColor.PRIMARY)
     kb.row()
-    kb.add(Text("/dl", {"cmd": "dl"}))
-    kb.add(Text("/list", {"cmd": "list"}))
+    kb.add(Text("/list"), color=KeyboardButtonColor.SECONDARY)
+    kb.add(Text("/albums"), color=KeyboardButtonColor.SECONDARY)
     kb.row()
-    kb.add(Text("/albums", {"cmd": "albums"}))
-    kb.add(Text("/addalbum", {"cmd": "addalbum"}))
+    kb.add(Text("/addalbum"), color=KeyboardButtonColor.SECONDARY)
+    kb.add(Text("/status"), color=KeyboardButtonColor.SECONDARY)
     kb.row()
-    kb.add(Text("/status", {"cmd": "status"}))
-    kb.add(Text("/help", {"cmd": "help"}))
+    kb.add(Text("/help"), color=KeyboardButtonColor.SECONDARY)
     return kb
+

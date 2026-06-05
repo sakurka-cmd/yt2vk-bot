@@ -14,6 +14,7 @@ from bot.config import VK_TOKEN, VK_GROUP_ID, LOG_LEVEL
 from bot import database
 from bot.handlers import register_handlers
 from bot.scheduler import scheduler_loop
+from bot.state_dispenser import DbStateDispenser
 
 # Force DEBUG logging for vkbottle to diagnose LP issues
 logging.basicConfig(
@@ -60,7 +61,7 @@ logger.info("vkbottle LP patched: added version=3 parameter")
 def setup_bot():
     """Create and configure the VK bot."""
     from vkbottle import Bot
-    bot = Bot(token=VK_TOKEN)
+    bot = Bot(token=VK_TOKEN, state_dispenser=DbStateDispenser())
     return bot
 
 
