@@ -7,4 +7,4 @@ services:
     volumes:
       - ./data:/app/data
     tmpfs:
-      - /tmp/yt2vk:,size=3g,mode=1777
+      - /tmp/yt2vk:rw,size=3g

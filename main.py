@@ -15,8 +15,9 @@ from bot import database
 from bot.handlers import register_handlers
 from bot.scheduler import scheduler_loop
 
+# Force DEBUG logging for vkbottle to diagnose LP issues
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
@@ -25,16 +26,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Patch vkbottle to add version parameter for new VK LP format
+import vkbottle.polling.bot_polling as bp
+from aiohttp import ClientTimeout
+
+_orig_get_event = bp.BotPolling.get_event
+
+async def patched_get_event(self, server):
+    logger.debug("LP request to %s ts=%s wait=%s", server.get("server"), server.get("ts"), self.wait)
+    try:
+        result = await self.api.http_client.request_json(
+            url=server["server"],
+            method="POST",
+            params={
+                "act": "a_check",
+                "key": server["key"],
+                "ts": server["ts"],
+                "wait": self.wait,
+                "version": 3,
+            },
+            timeout=ClientTimeout(total=self.wait + 10),
+        )
+        logger.debug("LP response: %s", str(result)[:200])
+        return result
+    except Exception as e:
+        logger.error("LP request failed: %s", e)
+        raise
+
+bp.BotPolling.get_event = patched_get_event
+logger.info("vkbottle LP patched: added version=3 parameter")
+
 
 def setup_bot():
     """Create and configure the VK bot."""
     from vkbottle import Bot
-    from vkbottle.bot.rules import FromMeRule
-
     bot = Bot(token=VK_TOKEN)
-    bot.labeler.message_view.register_middlewares(
-        # Ensure peer_id is from our group
-    )
     return bot
 
 
@@ -55,7 +81,6 @@ async def main():
 
     # Run bot polling
     logger.info("Starting VK Long Poll...")
-
     try:
         await bot.run_polling()
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -67,14 +92,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Ensure data directory exists
     os.makedirs("data", exist_ok=True)
-
-    # Handle graceful shutdown
     loop = asyncio.new_event_loop()
-    signals = (signal.SIGTERM, signal.SIGINT)
 
-    for sig in signals:
+    for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
             sig, lambda s=sig: asyncio.ensure_future(_shutdown(s))
         )
@@ -87,8 +108,8 @@ if __name__ == "__main__":
 
 async def _shutdown(sig):
     logger.info("Received signal %s, shutting down...", sig.name)
-    import asyncio
     for task in asyncio.all_tasks():
         if task is not asyncio.current_task():
             task.cancel()
     await asyncio.sleep(0.5)
+

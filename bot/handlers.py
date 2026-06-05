@@ -3,14 +3,15 @@
 import asyncio
 import logging
 
-from vkbottle import Bot, Message
-from vkbottle.rules import CommandRule, PayloadRule, IsFromUserRule
+from vkbottle import Bot
+from vkbottle.bot import Message
+from vkbottle.dispatch.rules.base import CommandRule, PayloadRule, FuncRule
 
 from bot import database as db
 from bot.states import States, ProcessingStatus
 from bot.downloader import (
     download_video, extract_video_id, extract_channel_id,
-    get_video_info, get_channel_info, cleanup_file, get_channel_feed,
+    get_video_info, get_channel_info, cleanup_file,
 )
 from bot.uploader import upload_video, create_album, list_albums
 from bot.keyboards import (
@@ -35,6 +36,22 @@ def register_handlers(bot: Bot):
     # ── /start ──────────────────────────────────────────────
     @bot.on.message(CommandRule("start", ["/!"]))
     async def cmd_start(msg: Message):
+        await msg.answer(
+            "Бот для сохранения видео с YouTube в альбомы сообщества VK.\n\n"
+            "Команды:\n"
+            "/subscribe — подписаться на YouTube-канал\n"
+            "/dl <url> — скачать видео по ссылке\n"
+            "/list — список подписок\n"
+            "/albums — список альбомов\n"
+            "/addalbum — создать альбом\n"
+            "/status — статус загрузки\n"
+            "/help — помощь",
+            keyboard=main_menu_keyboard(),
+        )
+
+    # ── "Начать" button (VK start button) ──
+    @bot.on.message(FuncRule(lambda msg: msg.text and msg.text.strip() == "Начать"))
+    async def cmd_nachat(msg: Message):
         await msg.answer(
             "Бот для сохранения видео с YouTube в альбомы сообщества VK.\n\n"
             "Команды:\n"
@@ -314,7 +331,8 @@ def register_handlers(bot: Bot):
         lines.append("\nУправление: /unsub, /quality")
 
         # Build inline keyboard for toggling
-        from vkbottle import Keyboard, KeyboardButtonColor, Text, CallbackQuery
+        from vkbottle import Keyboard, KeyboardButtonColor, Text
+        from vkbottle.bot import CallbackQuery
         kb = Keyboard(inline=True)
         for s in subs:
             label = f"{'✅' if s['active'] else '❌'} #{s['id']} {s['channel_title'][:20]}"
